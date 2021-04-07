@@ -21,3 +21,13 @@ devcontainer 内で docker を使うために `/var/run/docker.sock` をマウ�
 ```
 
 バイナリをコピーして、本家の docker-compose よりも優先されるように PATH を設定します。
+
+たとえば、Dockerfile に以下のように記述します。
+
+```
+RUN set -x \
+    && mkdir -p /usr/local/devcontainer-tool/bin \
+    && curl -fsSL -o /usr/local/devcontainer-tool/bin/docker-compose https://github.com/thamaji/devcontainer-compose/releases/download/v1.0.0/docker-compose \
+    && chmod +x /usr/local/devcontainer-tool/bin/docker-compose
+ENV PATH=/usr/local/devcontainer-tool/bin:${PATH}
+```

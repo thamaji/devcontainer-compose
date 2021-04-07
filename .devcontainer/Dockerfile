@@ -91,6 +91,12 @@ RUN set -x \
     && chmod +x /usr/local/bin/docker-compose \
     && curl -fsSL -o /etc/bash_completion.d/docker-compose "https://raw.githubusercontent.com/docker/compose/${COMPOSE_VERSION}/contrib/completion/bash/docker-compose"
 
+RUN set -x \
+    && mkdir -p /usr/local/devcontainer-tool/bin \
+    && curl -fsSL -o /usr/local/devcontainer-tool/bin/docker-compose https://github.com/thamaji/devcontainer-compose/releases/download/v1.0.0/docker-compose \
+    && chmod +x /usr/local/devcontainer-tool/bin/docker-compose
+ENV PATH=/usr/local/devcontainer-tool/bin:${PATH}
+
 # golang
 ARG GO_VERSION=1.16.1
 RUN set -x \
