@@ -5,7 +5,7 @@ VSCode Remote Container で devcontainer の中で docker-compose を使うと�
 
 devcontainer 内で docker を使うために `/var/run/docker.sock` をマウントしていると、docker-compose.yml の volumes で指定したパスが devcontainer 内のパスではなくホストのパスとして解釈されます。
 
-このツールは docker-compose をラップし、volumes のパスを devcontainer 内のパスとして解釈させるものです。
+このツールは docker-compose コマンドをラップし、volumes のパスを devcontainer 内のパスとして解釈させるものです。
 
 ## Usage
 
