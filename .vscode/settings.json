@@ -12,6 +12,8 @@
         "**/.devcontainer/.extensions": true,
         "**/.devcontainer/.go": true
     },
+    "files.autoSave": "afterDelay",
+    "files.autoSaveDelay": 1000,
     "go.useLanguageServer": true,
     "go.autocompleteUnimportedPackages": true,
     "go.formatTool": "goimports",

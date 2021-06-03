@@ -1,6 +1,9 @@
 FROM ubuntu:18.04 as devcontainer
 
 RUN set -x \
+    && sed -i.bak -r 's!(deb|deb-src) \S+!\1 mirror://mirrors.ubuntu.com/mirrors.txt!' /etc/apt/sources.list
+
+RUN set -x \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -77,9 +80,6 @@ RUN set -x \
     && groupadd --gid 999 docker \
     && usermod -aG docker vscode
 
-COPY docker.sh /usr/local/bin/docker
-RUN chmod +x /usr/local/bin/docker
-
 # docker compose
 ARG COMPOSE_VERSION=1.27.4
 RUN set -x \
@@ -90,12 +90,6 @@ RUN set -x \
     && curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose \
     && chmod +x /usr/local/bin/docker-compose \
     && curl -fsSL -o /etc/bash_completion.d/docker-compose "https://raw.githubusercontent.com/docker/compose/${COMPOSE_VERSION}/contrib/completion/bash/docker-compose"
-
-RUN set -x \
-    && mkdir -p /usr/local/devcontainer-tool/bin \
-    && curl -fsSL -o /usr/local/devcontainer-tool/bin/docker-compose https://github.com/thamaji/devcontainer-compose/releases/download/v1.0.0/docker-compose \
-    && chmod +x /usr/local/devcontainer-tool/bin/docker-compose
-ENV PATH=/usr/local/devcontainer-tool/bin:${PATH}
 
 # golang
 ARG GO_VERSION=1.16.1

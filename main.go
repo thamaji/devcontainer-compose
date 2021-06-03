@@ -1,80 +1,142 @@
 package main
 
 import (
-	"fmt"
+	"io"
 	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 
+	"github.com/thamaji/devcontainer-compose/devcontainer"
+	"github.com/thamaji/devcontainer-compose/parser"
+	"github.com/thamaji/devcontainer-compose/spec"
 	"gopkg.in/yaml.v2"
 )
 
+const DockerPath = "/usr/bin/docker"
+const ComposePath = "/usr/local/bin/docker-compose"
+
 func main() {
-	containerWorkspace, _ := os.LookupEnv("CONTAINER_WORKSPACE")
-	localWorkspace, _ := os.LookupEnv("LOCAL_WORKSPACE")
-
-	file := "docker-compose.yml"
-	if _, err := os.Stat(file); err != nil {
-		file = "docker-compose.yaml"
+	spec, err := spec.GetSpec(ComposePath)
+	if err != nil {
+		log.Fatalln(err)
 	}
 
-	args := []string{}
-	mode := 0
-	for _, arg := range os.Args[1:] {
-		switch mode {
-		case 0:
-			switch {
-			case arg == "-f" || arg == "--file":
-				mode = 1
-			case strings.HasPrefix(arg, "-"):
-				args = append(args, arg)
-			default:
-				args = append(args, arg)
-				mode = -1
-			}
-		case 1:
-			file = arg
-			mode = 0
+	environment := devcontainer.NewEnvironment(DockerPath)
+	command, err := convertArgs(os.Args[1:], spec, environment)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	exitCode := command.execute(ComposePath)
+
+	os.Exit(exitCode)
+}
+
+type command struct {
+	args   []string
+	onExit func()
+}
+
+func (command *command) execute(cliPath string) int {
+	cmd := exec.Command(cliPath, command.args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	exitCode := 255
+	if err := cmd.Start(); err == nil {
+		_ = cmd.Wait()
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+	if command.onExit != nil {
+		command.onExit()
+	}
+	return exitCode
+}
+
+func convertArgs(args []string, spec *spec.Spec, environment *devcontainer.Environment) (*command, error) {
+	ctx := parser.NewContext(args)
+
+	options, err := parser.ParseOptions(ctx, spec.GlobalOptions)
+	if err != nil {
+		return nil, err
+	}
+	var file string
+	var projectDirectory string
+
+	newOptions := make(parser.Options, 0, len(options))
+
+	for _, option := range options {
+		switch option.Name {
+		case "-f", "--file":
+			file = option.Value
+
+		case "--project-directory":
+			projectDirectory = option.Value
+
 		default:
-			args = append(args, arg)
+			newOptions.Add(option.Name, option.Value)
 		}
 	}
 
-	realpath := func(path string) string {
-		out, err := exec.Command("realpath", "-m", "--relative-base="+containerWorkspace, path).Output()
-		if err != nil {
-			panic(err)
-		}
-
-		path = strings.TrimSpace(string(out))
-
-		if strings.HasPrefix(path, "/") {
-			fmt.Fprintln(os.Stderr, "bind mount can only in workspace folder: "+path)
-			os.Exit(1)
-		}
-
-		return filepath.Join(localWorkspace, path)
+	if file != "" && projectDirectory == "" {
+		projectDirectory = filepath.Dir(file)
 	}
 
+	if file == "" {
+		file = "docker-compose.yml"
+		if _, err := os.Stat(file); err != nil {
+			file = "docker-compose.yaml"
+		}
+	}
+
+	if projectDirectory == "" {
+		projectDirectory = "."
+	}
+
+	path, err := createFakeComposeYaml(environment, projectDirectory, file)
+	if err != nil {
+		return nil, err
+	}
+	if path == "" {
+		command := &command{args: options.Args(), onExit: nil}
+		command.args = append(command.args, ctx.Args()...)
+		return command, nil
+	}
+
+	func() {
+		f, _ := os.Open(path)
+		io.Copy(os.Stdout, f)
+		f.Close()
+	}()
+
+	newOptions.Add("--file", path)
+	newOptions.Add("--project-directory", projectDirectory)
+
+	command := &command{args: newOptions.Args(), onExit: func() { os.Remove(path) }}
+	command.args = append(command.args, ctx.Args()...)
+	return command, nil
+}
+
+func createFakeComposeYaml(environment *devcontainer.Environment, projectDirectory string, file string) (dst string, err error) {
 	defer func() {
-		if err := recover(); err != nil {
-			exitCode := execCompose(os.Args[1:]...)
-			os.Exit(exitCode)
+		if recover() != nil {
+			dst = ""
 		}
 	}()
 
 	text, err := ioutil.ReadFile(file)
 	if err != nil {
-		panic(err)
+		return "", nil
 	}
 
 	var data interface{}
 
 	if err := yaml.Unmarshal(text, &data); err != nil {
-		panic(err)
+		return "", nil
 	}
 
 	compose := reflect.ValueOf(data)
@@ -89,22 +151,44 @@ func main() {
 
 			switch volume.Kind() {
 			case reflect.String:
-				if v := strings.SplitN(volume.String(), ":", 2); len(v) == 2 {
-					if t := compose.MapIndex(reflect.ValueOf("volumes")); t.IsValid() {
-						if t.Elem().Kind() != reflect.Map || t.Elem().MapIndex(reflect.ValueOf(v[0])).IsValid() {
-							continue
-						}
-					}
-					path := realpath(v[0])
-					volumes.Index(i).Set(reflect.ValueOf(path + ":" + v[1]))
+				params := strings.Split(volume.String(), ":")
+				if len(params) <= 0 {
+					// error
+					break
 				}
+
+				if t := compose.MapIndex(reflect.ValueOf("volumes")); t.IsValid() {
+					if t.Elem().Kind() != reflect.Map || t.Elem().MapIndex(reflect.ValueOf(params[0])).IsValid() {
+						break
+					}
+				}
+
+				path := params[0]
+				if !filepath.IsAbs(path) {
+					path = filepath.Join(projectDirectory, path)
+				}
+
+				hostPath, err := environment.GetHostPath(path)
+				if err != nil {
+					return "", err
+				}
+				params[0] = hostPath
+
+				volumes.Index(i).Set(reflect.ValueOf(strings.Join(params, ":")))
 
 			case reflect.Map:
 				vtype := volume.MapIndex(reflect.ValueOf("type")).Elem()
 				if vtype.String() == "bind" {
-					source := volume.MapIndex(reflect.ValueOf("source")).Elem()
-					path := realpath(source.String())
-					volume.SetMapIndex(reflect.ValueOf("source"), reflect.ValueOf(path))
+					path := volume.MapIndex(reflect.ValueOf("source")).Elem().String()
+					if !filepath.IsAbs(path) {
+						path = filepath.Join(projectDirectory, path)
+					}
+
+					hostPath, err := environment.GetHostPath(path)
+					if err != nil {
+						return "", err
+					}
+					volume.SetMapIndex(reflect.ValueOf("source"), reflect.ValueOf(hostPath))
 				}
 			}
 		}
@@ -112,28 +196,14 @@ func main() {
 
 	f, err := os.CreateTemp(os.TempDir(), "docker-compose-*.yml")
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 	err = yaml.NewEncoder(f).Encode(data)
 	f.Close()
 	if err != nil {
 		os.Remove(f.Name())
-		panic(err)
+		return "", err
 	}
 
-	args = append([]string{"--file", f.Name()}, args...)
-	exitCode := execCompose(args...)
-	os.Remove(f.Name())
-	os.Exit(exitCode)
-}
-
-func execCompose(args ...string) int {
-	cmd := exec.Command("/usr/local/bin/docker-compose", args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return 256
-	}
-	return cmd.ProcessState.ExitCode()
+	return f.Name(), nil
 }
