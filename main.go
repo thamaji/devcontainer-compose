@@ -1,7 +1,6 @@
 package main
 
 import (
-	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -106,12 +105,6 @@ func convertArgs(args []string, spec *spec.Spec, environment *devcontainer.Envir
 		command.args = append(command.args, ctx.Args()...)
 		return command, nil
 	}
-
-	func() {
-		f, _ := os.Open(path)
-		io.Copy(os.Stdout, f)
-		f.Close()
-	}()
 
 	newOptions.Add("--file", path)
 	newOptions.Add("--project-directory", projectDirectory)
